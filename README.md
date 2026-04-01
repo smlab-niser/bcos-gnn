@@ -1,8 +1,12 @@
- # Inherently Interpretable Graph Neural Networks via B-cos Alignment
- Accepted at International Conference on Pattern Recognition ICPR 2026
+# Inherently Interpretable Graph Neural Networks via B-cos Alignment
 
-'''
- @inproceedings{shruti2026interpretable,
+Accepted at the **28th International Conference on Pattern Recognition (ICPR 2026)**
+
+## Citation
+
+If you find this work useful, please cite:
+```bibtex
+@inproceedings{shruti2026interpretable,
   title     = {Inherently Interpretable Graph Neural Networks via B-cos Alignment},
   author    = {Pandey, Shruti and Mishra, Subhankar},
   booktitle = {Proceedings of the 28th International Conference on Pattern Recognition (ICPR)},
@@ -10,4 +14,4 @@
   month     = {August},
   note      = {To appear}
 }
-'''
+```
