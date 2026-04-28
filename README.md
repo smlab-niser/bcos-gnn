@@ -15,3 +15,4 @@ If you find this work useful, please cite:
   note      = {To appear}
 }
 ```
+Note: While the paper reports results without ReLU, the uploaded implementation includes ReLU in the architecture; empirically, removing ReLU yields similar or slightly better performance.
