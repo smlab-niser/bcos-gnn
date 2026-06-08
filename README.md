@@ -2,7 +2,7 @@
 
 Accepted at the **28th International Conference on Pattern Recognition (ICPR 2026)**
 
-# Inherently Interpretable Graph Neural Networks via B-cos Alignment
+
 
 This repository contains the official implementation of the paper:
 
