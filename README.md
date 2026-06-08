@@ -272,7 +272,7 @@ Results are reported as mean and standard deviation across multiple random initi
 
 ## License
 
-This code is released for research and reproducibility purposes. Please see the `LICENSE` file.
+This code is released for research and reproducibility purposes. Please see the [LICENSE](LICENSE) file.
 
 ---
 
