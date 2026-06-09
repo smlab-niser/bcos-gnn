@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# tuned_bcos_gat_node.py
+
 """
 Node Classification with Multi-run Averaging
 - Standard GAT baseline
 - Interpretable BCos-GAT (no softmax for traceable contributions)
 - Multi-B search
-- Dataset-specific tuning to ensure BCos-GAT >= baseline
+- Dataset-specific tuning to compare BCos-GAT with baseline
 - Reports mean ± std accuracy, loss, best B
 """
 
@@ -143,7 +143,7 @@ class InterpretableBCosGAT(nn.Module):
     
     def forward(self, x, edge_index):
         x = self.layer1(x, edge_index)
-        x = F.elu(x)
+        #x = F.elu(x)
         x = self.layer2(x, edge_index)
         return x
 
@@ -236,3 +236,4 @@ if __name__=="__main__":
         print(f"\nDataset: {ds}")
         print(f"  Baseline GAT test acc : {base['mean']:.4f} ± {base['std']:.4f}")
         print(f"  BCos-GAT Best B={summary[ds]['best_B']} test acc : {bcos['test_mean']:.4f} ± {bcos['test_std']:.4f}, val mean: {bcos['val_mean']:.4f}")
+
