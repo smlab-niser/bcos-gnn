@@ -46,7 +46,6 @@ class BCosGCN(nn.Module):
     def forward(self, x, edge_index, batch):
         x = bcos_transform(x, self.B)
         x = self.conv1(x, edge_index)
-        x = F.relu(x)
 
         x = bcos_transform(x, self.B)
         x = self.conv2(x, edge_index)
@@ -61,7 +60,6 @@ class BCosGCN(nn.Module):
 def node_importance(model, data):
     x = bcos_transform(data.x, model.B)
     x = model.conv1(x, data.edge_index)
-    x = F.relu(x)
 
     x = bcos_transform(x, model.B)
     x = model.conv2(x, data.edge_index)
