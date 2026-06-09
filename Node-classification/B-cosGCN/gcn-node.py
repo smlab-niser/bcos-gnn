@@ -1,11 +1,17 @@
-# bcos_gcn_tune.py
-# Node classification with multi-seed evaluation (10 seeds)
-# Adds mean/std reporting for Baseline GCN and BCos-GCN for each B.
+#!/usr/bin/env python3
+# ===========================================================
+# Standard GCN and BCos-GCN on Planetoid Datasets
+# Datasets: Cora, CiteSeer, PubMed, or all
+# Node classification with multi-seed evaluation
+#
+# StandardGCN uses ReLU as the standard baseline.
+# BCosGCN follows the paper setting without ReLU/ELU activation.
+# ===========================================================
 
 import argparse
+import json
 import os
 import random
-from typing import List, Dict, Tuple
 
 import numpy as np
 import torch
@@ -27,6 +33,19 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
+def canonical_dataset_name(name: str) -> str:
+    mapping = {
+        "cora": "Cora",
+        "citeseer": "CiteSeer",
+        "pubmed": "PubMed",
+        "all": "all",
+    }
+    key = name.strip().lower()
+    if key not in mapping:
+        raise ValueError("Unknown dataset. Use one of: Cora, CiteSeer, PubMed, all.")
+    return mapping[key]
+
+
 def normalize_adj_edge_weight(edge_index, num_nodes, dtype=torch.float):
     edge_index_with_self, _ = add_self_loops(edge_index, num_nodes=num_nodes)
     row, col = edge_index_with_self
@@ -40,9 +59,9 @@ def normalize_adj_edge_weight(edge_index, num_nodes, dtype=torch.float):
 
 
 # -----------------------------------------------------------
-# BCos layer
+# B-cos layer
 # -----------------------------------------------------------
-class BcosGCNLayer(nn.Module):
+class BCosGCNLayer(nn.Module):
     def __init__(self, in_features: int, out_features: int, B: float = 2.0):
         super().__init__()
         self.in_features = in_features
@@ -65,22 +84,26 @@ class BcosGCNLayer(nn.Module):
 
 
 # -----------------------------------------------------------
-# BCos GCN model
+# BCos-GCN model
 # -----------------------------------------------------------
-class BcosGCN(nn.Module):
+class BCosGCN(nn.Module):
+    """BCos-GCN model following the paper setting without ReLU/ELU activation."""
+
     def __init__(self, in_channels, hidden, out_channels, B=2.0, dropout=0.5):
         super().__init__()
         self.dropout = dropout
-        self.layer1 = BcosGCNLayer(in_channels, hidden, B)
-        self.layer2 = BcosGCNLayer(hidden, out_channels, B)
+        self.layer1 = BCosGCNLayer(in_channels, hidden, B)
+        self.layer2 = BCosGCNLayer(hidden, out_channels, B)
 
     def forward(self, x, edge_index, edge_weight):
         row, col = edge_index
+
         z = torch.zeros_like(x)
         z.index_add_(0, row, x[col] * edge_weight.unsqueeze(-1))
 
         h1 = self.layer1(z)
-        h1 = F.relu(h1)
+
+        # Paper setting: no ReLU/ELU activation is used in the B-cos model.
         h1 = F.dropout(h1, p=self.dropout, training=self.training)
 
         z2 = torch.zeros_like(h1)
@@ -90,9 +113,11 @@ class BcosGCN(nn.Module):
 
 
 # -----------------------------------------------------------
-# Baseline GCN model
+# Standard GCN baseline model
 # -----------------------------------------------------------
-class BaselineGCN(nn.Module):
+class StandardGCN(nn.Module):
+    """Standard GCN baseline with ReLU activation."""
+
     def __init__(self, in_channels, hidden, out_channels, dropout=0.5):
         super().__init__()
         self.conv1 = GCNConv(in_channels, hidden, bias=False)
@@ -175,13 +200,16 @@ def run_single_model(model_class, model_args, data, edge_index, edge_weight,
         "test_std": float(np.std(test_list)),
         "loss_mean": float(np.mean(loss_list)),
         "loss_std": float(np.std(loss_list)),
+        "all_val_scores": [float(x) for x in val_list],
+        "all_test_scores": [float(x) for x in test_list],
+        "all_losses": [float(x) for x in loss_list],
     }
 
 
 # ===========================================================
 # Tuning Loop
 # ===========================================================
-def run_tuning(dataset_name, device, B_grid, hidden, lr, weight_decay, epochs, base_seed):
+def run_tuning(dataset_name, device, B_grid, hidden, lr, weight_decay, epochs, base_seed, save_dir):
     print(f"\n=== Dataset: {dataset_name} | device={device} ===")
 
     dataset = Planetoid(root=f"./data/{dataset_name}", name=dataset_name)
@@ -199,8 +227,8 @@ def run_tuning(dataset_name, device, B_grid, hidden, lr, weight_decay, epochs, b
     # Standard GCN
     # ------------------------------------------------------
     print("\nRunning Standard GCN across 10 seeds...")
-    base_results = run_single_model(
-        BaselineGCN,
+    standard_results = run_single_model(
+        StandardGCN,
         (in_channels, hidden, out_channels),
         data,
         edge_index,
@@ -213,9 +241,9 @@ def run_tuning(dataset_name, device, B_grid, hidden, lr, weight_decay, epochs, b
     )
 
     print("\n=== Standard GCN Results (mean ± std) ===")
-    print(f"Val Acc : {base_results['val_mean']:.4f} ± {base_results['val_std']:.4f}")
-    print(f"Test Acc: {base_results['test_mean']:.4f} ± {base_results['test_std']:.4f}")
-    print(f"Loss    : {base_results['loss_mean']:.4f} ± {base_results['loss_std']:.4f}")
+    print(f"Val Acc : {standard_results['val_mean']:.4f} ± {standard_results['val_std']:.4f}")
+    print(f"Test Acc: {standard_results['test_mean']:.4f} ± {standard_results['test_std']:.4f}")
+    print(f"Loss    : {standard_results['loss_mean']:.4f} ± {standard_results['loss_std']:.4f}")
 
     # ------------------------------------------------------
     # BCos-GCN for each B
@@ -225,7 +253,7 @@ def run_tuning(dataset_name, device, B_grid, hidden, lr, weight_decay, epochs, b
     for B in B_grid:
         print(f"\nRunning BCos-GCN (B={B}) across 10 seeds...")
         res = run_single_model(
-            BcosGCN,
+            BCosGCN,
             (in_channels, hidden, out_channels, B),
             data,
             edge_index,
@@ -236,14 +264,45 @@ def run_tuning(dataset_name, device, B_grid, hidden, lr, weight_decay, epochs, b
             device,
             seeds,
         )
-        bcos_results[B] = res
+        bcos_results[str(B)] = res
 
         print(f"\n=== BCos-GCN (B={B}) Results ===")
         print(f"Val Acc : {res['val_mean']:.4f} ± {res['val_std']:.4f}")
         print(f"Test Acc: {res['test_mean']:.4f} ± {res['test_std']:.4f}")
         print(f"Loss    : {res['loss_mean']:.4f} ± {res['loss_std']:.4f}")
 
-    return base_results, bcos_results
+    # Select best B by validation mean
+    best_B = max(bcos_results.keys(), key=lambda b: bcos_results[b]["val_mean"])
+    best_bcos = bcos_results[best_B]
+
+    print("\n================ FINAL SUMMARY ================")
+    print(f"Dataset: {dataset_name}")
+    print(
+        f"Standard GCN Test: {standard_results['test_mean']:.4f} ± "
+        f"{standard_results['test_std']:.4f}"
+    )
+    print(
+        f"Best BCos-GCN B={best_B} Test: {best_bcos['test_mean']:.4f} ± "
+        f"{best_bcos['test_std']:.4f}"
+    )
+
+    result = {
+        "dataset": dataset_name,
+        "standard_gcn": standard_results,
+        "bcos_gcn_grid": bcos_results,
+        "best_bcos_gcn": {
+            "B": float(best_B),
+            **best_bcos,
+        },
+    }
+
+    os.makedirs(save_dir, exist_ok=True)
+    outfile = os.path.join(save_dir, f"{dataset_name}_bcos_gcn_node_results.json")
+    with open(outfile, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"Summary saved to {outfile}")
+
+    return result
 
 
 # ===========================================================
@@ -251,25 +310,46 @@ def run_tuning(dataset_name, device, B_grid, hidden, lr, weight_decay, epochs, b
 # ===========================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="Cora",
-                        choices=["Cora", "CiteSeer", "PubMed"])
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="all",
+        choices=["Cora", "CiteSeer", "PubMed", "all"],
+        help="Dataset to run: Cora, CiteSeer, PubMed, or all",
+    )
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--save_dir", type=str, default="results")
     args = parser.parse_args()
 
     B_grid = [1.0, 1.5, 2.0, 2.5, 3.0]
 
-    run_tuning(
-        args.dataset,
-        device=args.device,
-        B_grid=B_grid,
-        hidden=args.hidden,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        epochs=args.epochs,
-        base_seed=args.seed,
-    )
+    selected = canonical_dataset_name(args.dataset)
+    datasets_to_run = ["Cora", "CiteSeer", "PubMed"] if selected == "all" else [selected]
+
+    all_results = {}
+    for dataset_name in datasets_to_run:
+        all_results[dataset_name] = run_tuning(
+            dataset_name,
+            device=args.device,
+            B_grid=B_grid,
+            hidden=args.hidden,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            epochs=args.epochs,
+            base_seed=args.seed,
+            save_dir=args.save_dir,
+        )
+
+    if len(datasets_to_run) > 1:
+        os.makedirs(args.save_dir, exist_ok=True)
+        combined_file = os.path.join(args.save_dir, "all_bcos_gcn_node_results.json")
+        with open(combined_file, "w") as f:
+            json.dump(all_results, f, indent=2)
+        print("\n=== ALL DATASETS COMPLETED ===")
+        print(f"Combined summary saved to {combined_file}")
+
