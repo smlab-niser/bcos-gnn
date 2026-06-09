@@ -1,17 +1,19 @@
 """
 full_gat_bcos_experiment.py
 Runs BOTH:
-  1) Standard GAT (k-fold CV)
-  2) BCos-GAT (for multiple B values, optional learnable B)
+  1) Standard GAT baseline with standard ELU activation
+  2) BCos-GAT without ReLU/ELU activation, following the paper setting
 
 Reports mean ± std accuracy and loss for ALL models.
 
-Datasets: MUTAG, PROTEINS
+Datasets: MUTAG, PROTEINS, or all
 """
 
 import argparse
 import random
 import math
+import os
+import json
 from statistics import mean, stdev
 
 import torch
@@ -117,11 +119,16 @@ class BCosGATGraph(nn.Module):
 
     def forward(self, x, edge_index, batch):
         x = F.dropout(x, p=self.drop, training=self.training)
-        x = F.elu(self.n1(self.g1(x, edge_index)))
-        x = F.dropout(x, p=self.drop, training=self.training)
-        h = F.elu(self.n2(self.g2(x, edge_index)))
 
-        h_b = 0.7 * h + 0.3 * self.bcos(h)   # BCos blend
+        # Paper setting: no ReLU/ELU activation is used in the B-cos model.
+        x = self.n1(self.g1(x, edge_index))
+
+        x = F.dropout(x, p=self.drop, training=self.training)
+
+        # Paper setting: no ReLU/ELU activation is used in the B-cos model.
+        h = self.n2(self.g2(x, edge_index))
+
+        h_b = 0.7 * h + 0.3 * self.bcos(h)   # B-cos blend
 
         g = global_mean_pool(h_b, batch)
         return self.fc(g)
@@ -245,8 +252,13 @@ def run_kfold(dataset, model_name, model_fn, model_kwargs,
 # -------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="PROTEINS",
-                        choices=["MUTAG", "PROTEINS"])
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="all",
+        choices=["MUTAG", "PROTEINS"],
+        help="Dataset to run: MUTAG, PROTEINS"
+    )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--folds", type=int, default=10)
@@ -257,50 +269,79 @@ if __name__ == "__main__":
     parser.add_argument("--b_values", nargs="+", type=float,
                         default=[1.0, 1.2, 1.5, 2.0])
     parser.add_argument("--learn_B", action="store_true")
+    parser.add_argument("--save_dir", type=str, default="results")
 
     args = parser.parse_args()
 
     device = torch.device("cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu")
     set_seed(42)
 
-    # Load dataset
-    dataset = prepare_dataset(args.dataset)
+    datasets_to_run = ["MUTAG", "PROTEINS"] if args.dataset == "all" else [args.dataset]
+    os.makedirs(args.save_dir, exist_ok=True)
 
-    # ------------------------------
-    # 1) RUN STANDARD GAT
-    # ------------------------------
-    gat_results = run_kfold(
-        dataset,
-        model_name="Standard GAT",
-        model_fn=GATGraph,
-        model_kwargs=dict(
-            hidden=args.hidden,
-            heads=args.heads,
-            dropout=args.dropout
-        ),
-        folds=args.folds,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        device=device
-    )
+    all_results = {}
 
-    # ------------------------------
-    # 2) RUN BCOS-GAT FOR ALL B
-    # ------------------------------
-    for B in args.b_values:
-        bcos_results = run_kfold(
+    for dataset_name in datasets_to_run:
+        print(f"\n\n##################################################")
+        print(f"Running dataset: {dataset_name}")
+        print(f"##################################################")
+
+        dataset = prepare_dataset(dataset_name)
+
+        dataset_results = {}
+
+        # ------------------------------
+        # 1) RUN STANDARD GAT
+        # ------------------------------
+        gat_results = run_kfold(
             dataset,
-            model_name=f"BCos-GAT (B={B}, learn_B={args.learn_B})",
-            model_fn=BCosGATGraph,
+            model_name=f"Standard GAT ({dataset_name})",
+            model_fn=GATGraph,
             model_kwargs=dict(
                 hidden=args.hidden,
                 heads=args.heads,
-                dropout=args.dropout,
-                B=B,
-                learn_B=args.learn_B
+                dropout=args.dropout
             ),
             folds=args.folds,
             epochs=args.epochs,
             batch_size=args.batch_size,
             device=device
         )
+        dataset_results["Standard GAT"] = gat_results
+
+        # ------------------------------
+        # 2) RUN BCOS-GAT FOR ALL B
+        # ------------------------------
+        for B in args.b_values:
+            bcos_results = run_kfold(
+                dataset,
+                model_name=f"BCos-GAT ({dataset_name}, B={B}, learn_B={args.learn_B})",
+                model_fn=BCosGATGraph,
+                model_kwargs=dict(
+                    hidden=args.hidden,
+                    heads=args.heads,
+                    dropout=args.dropout,
+                    B=B,
+                    learn_B=args.learn_B
+                ),
+                folds=args.folds,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                device=device
+            )
+            dataset_results[f"BCos-GAT_B={B}"] = bcos_results
+
+        all_results[dataset_name] = dataset_results
+
+        dataset_outfile = os.path.join(args.save_dir, f"{dataset_name}_gat_bcos_graph_results.json")
+        with open(dataset_outfile, "w") as f:
+            json.dump(dataset_results, f, indent=2)
+        print(f"Saved {dataset_name} summary to {dataset_outfile}")
+
+    if len(datasets_to_run) > 1:
+        combined_outfile = os.path.join(args.save_dir, "all_gat_bcos_graph_results.json")
+        with open(combined_outfile, "w") as f:
+            json.dump(all_results, f, indent=2)
+        print("\n=== ALL DATASETS COMPLETED ===")
+        print(f"Saved combined summary to {combined_outfile}")
+
