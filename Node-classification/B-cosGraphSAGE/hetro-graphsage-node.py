@@ -99,7 +99,7 @@ class BCosGraphSAGE(nn.Module):
         agg = agg / deg.clamp(min=1).unsqueeze(1)
 
         h = agg + self.self_lin1(x)                    # preserve self-info
-        h = F.relu(h)
+        #h = F.relu(h)
         h = F.dropout(h, p=self.dropout, training=self.training)
 
         # ===== Layer 2 =====
@@ -231,3 +231,4 @@ def run():
 
 if __name__ == '__main__':
     run()
+
