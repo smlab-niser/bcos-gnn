@@ -95,7 +95,8 @@ class BCosGCN(nn.Module):
         z = torch.zeros_like(x)
         z.index_add_(0, row, x[col] * edge_weight.unsqueeze(-1))
 
-        h = F.relu(self.lin1(z))
+        h = self.lin1(z)
+        # Paper setting: no ReLU activation in the B-cos model.
         h = F.dropout(h, p=self.dropout, training=self.training)
 
         z2 = torch.zeros_like(h)
@@ -212,3 +213,4 @@ def run():
 
 if __name__ == '__main__':
     run()
+
