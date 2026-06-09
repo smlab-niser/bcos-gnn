@@ -1,5 +1,5 @@
 # ============================================================
-# BCos-GCN Node Classification – Final Script (Revised)
+# BCos-GCN Node Classification – Final Script for plots(Revised)
 # ============================================================
 
 import torch
@@ -74,7 +74,7 @@ class BCosGCN(nn.Module):
     def forward(self, x, edge_index):
         z1 = self.conv1(x, edge_index)
         h1, s1 = self.bcos1(z1)
-        h1 = F.relu(h1)
+        #h1 = F.relu(h1)
         z2 = self.conv2(h1, edge_index)
         out, s2 = self.bcos2(z2)
         return out, {"z": (z1.detach(), z2.detach()), "scale": (s1.detach(), s2.detach())}
