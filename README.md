@@ -1,11 +1,13 @@
+# Bcos-GNN
 # Inherently Interpretable Graph Neural Networks via B-cos Alignment
 
 Accepted at the **28th International Conference on Pattern Recognition (ICPR 2026)**
 
 This repository contains the implementation of the paper:
 
-**Inherently Interpretable Graph Neural Networks via B-cos Alignment**  
+**Inherently Interpretable Graph Neural Networks via B-cos Alignment**
 
+---
 
 ## Repository Structure
 
@@ -16,13 +18,28 @@ bcos-gnn/
 ├── Datasets/
 ├── Node-classification/
 │   ├── B-cosGCN/
-│   ├── B-cos GAT/
-│   ├── B-cos GraphSAGE/
-│   └── Analysis B-cos GCN/
+│   │   ├── gcn-node.py
+│   │   ├── hetro-gcn-node.py
+│   │  
+│   ├── B-cosGAT/
+│   │   ├── gat-node.py
+│   │   └── hetro-gat-node.py
+│   ├── B-cosGraphSAGE/
+│   │   ├── graphsage-node.py
+│   │   ├── hetro-graphsage-node.py
+│   │   
+│   └── AnalysisB-cosGCN/
+│       ├── B-cos-GCN-cora-multi-B-val.py
+│       ├── B-cos-GCN-merged-dataset.py
+│       └── bcos-gcn-node-anal6.py
 ├── Graph-classification/
-│   ├── B-cos GCN/
-│   ├── B-cos GAT/
-│   └── B-cos GraphSAGE/
+│   ├── B-cosGCN/
+│   │   ├── gcn.py
+│   │   └── bcos-gcn-Mutag-anal6.py
+│   ├── B-cosGAT/
+│   │   └── gat.py
+│   └── B-cosGraphSAGE/
+│       └── graphsage.py
 └── Images/
 ```
 
@@ -56,12 +73,13 @@ torch-spline-conv==1.2.2+pt25cu121
 ---
 
 ## Installation
+
 Create and activate a fresh conda environment:
 
 ```bash
 conda create -n pyg python=3.10
 conda activate pyg
-
+```
 
 Install PyTorch:
 
@@ -94,25 +112,25 @@ pip install -r requirements.txt
 After installation, verify the environment using:
 
 ```bash
-python --version && \
-python -c "import torch; print('torch=='+torch.__version__)" && \
-python -c "import torch; print('CUDA version:', torch.version.cuda); print('CUDA available:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU only')" && \
-python -c "import torch_geometric; print('torch-geometric=='+torch_geometric.__version__)" && \
-python -c "import numpy; print('numpy=='+numpy.__version__)" && \
-python -c "import scipy; print('scipy=='+scipy.__version__)" && \
-python -c "import sklearn; print('scikit-learn=='+sklearn.__version__)" && \
-python -c "import networkx; print('networkx=='+networkx.__version__)" && \
-python -c "import matplotlib; print('matplotlib=='+matplotlib.__version__)" && \
-python -c "import pandas; print('pandas=='+pandas.__version__)" && \
+python --version && \\
+python -c "import torch; print('torch=='+torch.__version__)" && \\
+python -c "import torch; print('CUDA version:', torch.version.cuda); print('CUDA available:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU only')" && \\
+python -c "import torch_geometric; print('torch-geometric=='+torch_geometric.__version__)" && \\
+python -c "import numpy; print('numpy=='+numpy.__version__)" && \\
+python -c "import scipy; print('scipy=='+scipy.__version__)" && \\
+python -c "import sklearn; print('scikit-learn=='+sklearn.__version__)" && \\
+python -c "import networkx; print('networkx=='+networkx.__version__)" && \\
+python -c "import matplotlib; print('matplotlib=='+matplotlib.__version__)" && \\
+python -c "import pandas; print('pandas=='+pandas.__version__)" && \\
 python -c "import tqdm; print('tqdm=='+tqdm.__version__)"
 ```
 
 Optional PyTorch Geometric dependency check:
 
 ```bash
-python -c "import torch_scatter; print('torch-scatter=='+torch_scatter.__version__)" && \
-python -c "import torch_sparse; print('torch-sparse=='+torch_sparse.__version__)" && \
-python -c "import torch_cluster; print('torch-cluster=='+torch_cluster.__version__)" && \
+python -c "import torch_scatter; print('torch-scatter=='+torch_scatter.__version__)" && \\
+python -c "import torch_sparse; print('torch-sparse=='+torch_sparse.__version__)" && \\
+python -c "import torch_cluster; print('torch-cluster=='+torch_cluster.__version__)" && \\
 python -c "import torch_spline_conv; print('torch-spline-conv=='+torch_spline_conv.__version__)"
 ```
 
@@ -139,7 +157,9 @@ MUTAG
 PROTEINS
 ```
 
-The datasets are either included in the `Datasets/` directory or can be downloaded through PyTorch Geometric. No private dataset is used.
+The datasets are publicly available and can be downloaded automatically through PyTorch Geometric when the scripts are executed. No private dataset is used.
+
+No pretrained model weights are required. All models are trained from scratch.
 
 ---
 
@@ -149,39 +169,39 @@ The datasets are either included in the `Datasets/` directory or can be download
 
 ```bash
 cd "Node-classification/B-cosGCN"
-python bcos-gcn-node.py
+python gcn-node.py
 ```
 
 For heterophilic datasets:
 
 ```bash
-python Hetro-bcos-gcn-node.py
+python hetro-gcn-node.py
 ```
 
 ### B-cos GraphSAGE
 
 ```bash
-cd "Node-classification/B-cos GraphSAGE"
-python bcos-graphsage-node.py
+cd "Node-classification/B-cosGraphSAGE"
+python graphsage-node.py
 ```
 
 For heterophilic datasets:
 
 ```bash
-python hetero-bcos-graphsage-node.py
+python hetro-graphsage-node.py
 ```
 
 ### B-cos GAT
 
 ```bash
-cd "Node-classification/B-cos GAT"
-python bcos-gat-node.py
+cd "Node-classification/B-cosGAT"
+python gat-node.py
 ```
 
 For heterophilic datasets:
 
 ```bash
-python hetero-bcos-gat-node.py
+python hetro-gat-node.py
 ```
 
 ---
@@ -191,11 +211,11 @@ python hetero-bcos-gat-node.py
 ### B-cos GCN
 
 ```bash
-cd "Graph-classification/B-cos GCN"
-python bcos-gcn-graph.py
+cd "Graph-classification/B-cosGCN"
+python gcn.py
 ```
 
-For MUTAG analysis:
+For MUTAG fidelity analysis:
 
 ```bash
 python bcos-gcn-Mutag-anal6.py
@@ -204,15 +224,15 @@ python bcos-gcn-Mutag-anal6.py
 ### B-cos GraphSAGE
 
 ```bash
-cd "Graph-classification/B-cos GraphSAGE"
-python bcos-graphsage-graph.py
+cd "Graph-classification/B-cosGraphSAGE"
+python graphsage.py
 ```
 
 ### B-cos GAT
 
 ```bash
-cd "Graph-classification/B-cos GAT"
-python bcos-gat-graph.py
+cd "Graph-classification/B-cosGAT"
+python gat.py
 ```
 
 ---
@@ -222,7 +242,7 @@ python bcos-gat-graph.py
 To reproduce the fidelity-sparsity analysis:
 
 ```bash
-cd "Node-classification/Analysis B-cos GCN"
+cd "Node-classification/AnalysisB-cosGCN"
 python B-cos-GCN-cora-multi-B-val.py
 ```
 
@@ -238,7 +258,7 @@ The generated plots correspond to the figures stored in the `Images/` directory.
 
 ## Expected Results
 
-Small numerical variations may occur due to random initialization, GPU nondeterminism, and library versions.
+Small numerical variations may occur due to random initialization, GPU nondeterminism, dataset splits, and library versions.
 
 ### Node Classification Results
 
@@ -260,6 +280,12 @@ Small numerical variations may occur due to random initialization, GPU nondeterm
 
 ## Reproducibility Notes
 
+The B-cos variants in this repository follow the paper setting, where ReLU/ELU activations are not used in the B-cos model path. 
+Standard baseline models retain their usual nonlinear activations.
+
+Small numerical variations from the reported paper results may occur due to random initialization, dataset splits, GPU/CUDA nondeterminism, and library-version differences.
+In our reproduced runs, the results are generally consistent with the reported values, with typical deviations within approximately ±1 percentage point.
+
 The B-cos exponent values are selected from:
 
 ```text
@@ -279,6 +305,7 @@ This code is released for research and reproducibility purposes. Please see the 
 ## Citation
 
 If you find this work useful, please cite:
+
 ```bibtex
 @inproceedings{shruti2026interpretable,
   title     = {Inherently Interpretable Graph Neural Networks via B-cos Alignment},
@@ -289,4 +316,4 @@ If you find this work useful, please cite:
   note      = {To appear}
 }
 ```
-Note: While the paper reports results without ReLU, the uploaded implementation includes ReLU in the architecture; empirically, removing ReLU yields similar or slightly better performance.
+
