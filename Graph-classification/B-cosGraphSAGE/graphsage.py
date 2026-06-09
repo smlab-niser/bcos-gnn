@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-B-cos-GraphSAGE training script for MUTAG and PROTEINS.
+Standard GraphSAGE and B-cos GraphSAGE training script for MUTAG and PROTEINS.
 
 Run examples:
   python bcos_graphsage_unified.py --dataset MUTAG
   python bcos_graphsage_unified.py --dataset PROTEINS
+  python bcos_graphsage_unified.py --dataset all
 
 Outputs:
- - Per-run logs
- - Mean ± std test accuracy and loss for Standard GraphSAGE and B-cos GraphSAGE (swept B)
- - Prints best B where B-cos >= standard (if any)
+ - Dataset-level final summaries only
+ - Mean ± std test accuracy and loss for StandardGraphSAGE and BCosGraphSAGE
+ - JSON summary files
+
+BCosGraphSAGE setting:
+ - no ReLU/ELU activation
+ - no linear bias in B-cos message/self layers
+ - no affine bias in B-cos LayerNorm
+ - no bias in the B-cos graph-level classifier
 """
 
 import argparse
@@ -17,6 +24,7 @@ import math
 import random
 import numpy as np
 import os
+import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,7 +32,6 @@ from torch_geometric.utils import scatter, degree
 from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import global_mean_pool
-import matplotlib.pyplot as plt
 
 # -------------------------
 # Utilities
@@ -87,9 +94,11 @@ class CustomSAGEConv(nn.Module):
         self.B = B
         self.use_edge_attr = use_edge_attr
         if use_bcos:
-            self.lin_msg = BcosLinear(in_channels, out_channels, bias=bias, B=B)
-            self.lin_self = BcosLinear(in_channels, out_channels, bias=bias, B=B)
+            # Paper/RRPR setting: B-cos message and self transformations are bias-free.
+            self.lin_msg = BcosLinear(in_channels, out_channels, bias=False, B=B)
+            self.lin_self = BcosLinear(in_channels, out_channels, bias=False, B=B)
         else:
+            # Standard GraphSAGE baseline keeps the usual bias term.
             self.lin_msg = nn.Linear(in_channels, out_channels, bias=bias)
             self.lin_self = nn.Linear(in_channels, out_channels, bias=bias)
         # optional projection for edge attrs to message dim
@@ -123,9 +132,9 @@ class CustomSAGEConv(nn.Module):
         return out
 
 # -------------------------
-# GraphSAGENet (stacked CustomSAGEConv)
+# Base GraphSAGE model used by Standard and B-cos variants
 # -------------------------
-class GraphSAGENet(nn.Module):
+class BaseGraphSAGEModel(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers=2,
                  use_bcos=False, B=2.0, dropout=0.2, use_layernorm=True, use_edge_attr=False, edge_attr_dim=None):
         super().__init__()
@@ -138,31 +147,87 @@ class GraphSAGENet(nn.Module):
         # first
         self.convs.append(CustomSAGEConv(in_channels, hidden_channels, use_bcos=use_bcos, B=B,
                                          use_edge_attr=use_edge_attr, edge_attr_dim=edge_attr_dim))
-        self.norms.append(nn.LayerNorm(hidden_channels) if use_layernorm else nn.BatchNorm1d(hidden_channels))
+        if use_layernorm:
+            # For B-cos, use non-affine LayerNorm to avoid adding bias/gain parameters.
+            self.norms.append(nn.LayerNorm(hidden_channels, elementwise_affine=not use_bcos))
+        else:
+            self.norms.append(nn.BatchNorm1d(hidden_channels, affine=not use_bcos))
         # remaining
         for _ in range(num_layers - 1):
             self.convs.append(CustomSAGEConv(hidden_channels, hidden_channels, use_bcos=use_bcos, B=B,
                                              use_edge_attr=use_edge_attr, edge_attr_dim=edge_attr_dim))
-            self.norms.append(nn.LayerNorm(hidden_channels) if use_layernorm else nn.BatchNorm1d(hidden_channels))
-        # head
-        self.pool_lin = nn.Linear(hidden_channels, out_channels)
+            if use_layernorm:
+                self.norms.append(nn.LayerNorm(hidden_channels, elementwise_affine=not use_bcos))
+            # For B-cos, use non-affine LayerNorm to avoid adding bias/gain parameters.
+             
+        else:
+            self.norms.append(nn.BatchNorm1d(hidden_channels, affine=not use_bcos))
+        # Graph-level classifier.
+        # Standard baseline keeps bias; B-cos model uses bias-free classifier.
+        self.pool_lin = nn.Linear(hidden_channels, out_channels, bias=not use_bcos)
 
     def forward(self, x, edge_index, batch, edge_attr=None, record_messages=False):
         # x: (N_total, F)
         for i, conv in enumerate(self.convs):
             # pass edge_attr unchanged (we use same edge_attr for every layer)
             x = conv(x, edge_index, edge_attr=edge_attr)
+
             # record per-layer node feats if requested (only last layer needed usually)
             x = self.norms[i](x)
-            x = F.relu(x)
+
+            # Standard GraphSAGE baseline uses ReLU.
+            # Paper setting for B-cos GraphSAGE: no ReLU/ELU activation.
+            if not self.use_bcos:
+                x = F.relu(x)
+
             x = F.dropout(x, p=self.dropout, training=self.training)
+
         # save last node features for attribution (detach)
         if record_messages:
             self._last_node_feats = x.detach().cpu()
             # per-conv messages/agg could be recorded within convs if needed
+
         x = global_mean_pool(x, batch)
         out = self.pool_lin(x)
         return out
+
+
+class StandardGraphSAGE(BaseGraphSAGEModel):
+    """Standard GraphSAGE baseline with ReLU activation."""
+
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=2,
+                 dropout=0.2, use_layernorm=True, use_edge_attr=False, edge_attr_dim=None):
+        super().__init__(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            out_channels=out_channels,
+            num_layers=num_layers,
+            use_bcos=False,
+            B=1.0,
+            dropout=dropout,
+            use_layernorm=use_layernorm,
+            use_edge_attr=use_edge_attr,
+            edge_attr_dim=edge_attr_dim,
+        )
+
+
+class BCosGraphSAGE(BaseGraphSAGEModel):
+    """B-cos GraphSAGE model following the paper setting without ReLU/ELU activation."""
+
+    def __init__(self, in_channels, hidden_channels, out_channels, B=2.0, num_layers=2,
+                 dropout=0.2, use_layernorm=True, use_edge_attr=False, edge_attr_dim=None):
+        super().__init__(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            out_channels=out_channels,
+            num_layers=num_layers,
+            use_bcos=True,
+            B=B,
+            dropout=dropout,
+            use_layernorm=use_layernorm,
+            use_edge_attr=use_edge_attr,
+            edge_attr_dim=edge_attr_dim,
+        )
 
 # -------------------------
 # Training & evaluation
@@ -239,7 +304,8 @@ def build_loaders_from_indices(dataset, idx_tuple, batch_size, shuffle_train=Tru
 def run_experiment(dataset_name="MUTAG",
                    B_values=[1.0,1.5,2.0,2.5],
                    runs=5,
-                   device=None):
+                   device=None,
+                   save_dir="results"):
     # Prefer CUDA > MPS > CPU
     if device is None:
         try:
@@ -258,6 +324,8 @@ def run_experiment(dataset_name="MUTAG",
             device = torch.device("cpu")
     print("Device:", device)
     print("CUDA available:", torch.cuda.is_available())
+    os.makedirs(save_dir, exist_ok=True)
+
     # load dataset
     ds = TUDataset(root="data/%s" % dataset_name, name=dataset_name)
     # ensure features
@@ -267,18 +335,32 @@ def run_experiment(dataset_name="MUTAG",
     print(f"Dataset {dataset_name}: graphs={len(ds)}, node_features={in_channels}, classes={num_classes}")
 
     # dataset-specific hyperparams
+    # Baseline settings are kept close to the original script.
+    # B-cos gets only small dataset-specific tuning knobs below.
     if dataset_name.upper() == "MUTAG":
         hidden = 128
         batch_size = 16
         epochs = 200
         lr = 5e-4
         weight_decay = 0.0
+
+        # Small B-cos tuning to recover the no-ReLU setting on MUTAG.
+        bcos_epochs = 300
+        bcos_lr = 1e-3
+        bcos_weight_decay = 1e-4
+        bcos_dropout = 0.10
     elif dataset_name.upper() == "PROTEINS":
         hidden = 160
         batch_size = 32
         epochs = 150
         lr = 8e-4
         weight_decay = 1e-4
+
+        # Keep PROTEINS close to the original because performance is already stable.
+        bcos_epochs = 180
+        bcos_lr = 8e-4
+        bcos_weight_decay = 1e-4
+        bcos_dropout = 0.20
     else:
         # generic
         hidden = 128
@@ -286,6 +368,10 @@ def run_experiment(dataset_name="MUTAG",
         epochs = 150
         lr = 5e-4
         weight_decay = 0.0
+        bcos_epochs = epochs
+        bcos_lr = lr
+        bcos_weight_decay = weight_decay
+        bcos_dropout = 0.20
 
     # prepare splits: for PROTEINS use 10-fold CV, for MUTAG use repeated stratified shuffles
     indices_splits = []
@@ -322,20 +408,26 @@ def run_experiment(dataset_name="MUTAG",
             test_idx = perm[n_train+n_val:]
             indices_splits.append((train_idx, val_idx, test_idx))
 
-    device_cpu = torch.device("cpu")
     criterion = nn.CrossEntropyLoss()
 
     # --- Standard GraphSAGE baseline (same arch but use_bcos=False)
     std_accs = []
     std_losses = []
-    print("\n=== Running STANDARD GraphSAGE baseline ===")
+    print("\nRunning Standard GraphSAGE baseline...")
     for run_no, split in enumerate(indices_splits):
         seed = 100 + run_no
         set_seed(seed)
         train_loader, val_loader, test_loader = build_loaders_from_indices(ds, split, batch_size)
-        model = GraphSAGENet(in_channels, hidden, num_classes, num_layers=2, use_bcos=False,
-                             B=1.0, dropout=0.2, use_layernorm=True,
-                             use_edge_attr=False, edge_attr_dim=None).to(device)
+        model = StandardGraphSAGE(
+            in_channels=in_channels,
+            hidden_channels=hidden,
+            out_channels=num_classes,
+            num_layers=2,
+            dropout=0.2,
+            use_layernorm=True,
+            use_edge_attr=False,
+            edge_attr_dim=None,
+        ).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
         best_val = -1.0
         best_state = None
@@ -350,7 +442,6 @@ def run_experiment(dataset_name="MUTAG",
         test_acc, test_loss = evaluate(model, test_loader, device, criterion)
         std_accs.append(test_acc)
         std_losses.append(test_loss)
-        print(f"[STANDARD] run {run_no+1}/{len(indices_splits)} seed={seed} best_val={best_val:.4f} test_acc={test_acc:.4f} test_loss={test_loss:.4f}")
 
     std_mean_acc, std_std_acc = summarize(std_accs)
     std_mean_loss, std_std_loss = summarize(std_losses)
@@ -358,21 +449,29 @@ def run_experiment(dataset_name="MUTAG",
 
     # --- B-cos GraphSAGE sweep
     b_results = {}
-    print("\n=== Running B-cos GraphSAGE sweep ===")
+    print("\nRunning B-cos GraphSAGE sweep...")
     for B in B_values:
         accs = []
         losses = []
-        print(f"\n--- B = {B} ---")
         for run_no, split in enumerate(indices_splits):
             seed = 2000 + run_no
             set_seed(seed)
             train_loader, val_loader, test_loader = build_loaders_from_indices(ds, split, batch_size)
-            model = GraphSAGENet(in_channels, hidden, num_classes, num_layers=2, use_bcos=True, B=B,
-                                 dropout=0.2, use_layernorm=True, use_edge_attr=False, edge_attr_dim=None).to(device)
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+            model = BCosGraphSAGE(
+                in_channels=in_channels,
+                hidden_channels=hidden,
+                out_channels=num_classes,
+                B=B,
+                num_layers=2,
+                dropout=bcos_dropout,
+                use_layernorm=True,
+                use_edge_attr=False,
+                edge_attr_dim=None,
+            ).to(device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=bcos_lr, weight_decay=bcos_weight_decay)
             best_val = -1.0
             best_state = None
-            for epoch in range(1, epochs+1):
+            for epoch in range(1, bcos_epochs+1):
                 _ = train_epoch(model, train_loader, optimizer, device, criterion, clip=5.0)
                 val_acc, _ = evaluate(model, val_loader, device, criterion)
                 if val_acc > best_val:
@@ -382,7 +481,6 @@ def run_experiment(dataset_name="MUTAG",
             test_acc, test_loss = evaluate(model, test_loader, device, criterion)
             accs.append(test_acc)
             losses.append(test_loss)
-            print(f"[BCOS B={B}] run {run_no+1}/{len(indices_splits)} seed={seed} best_val={best_val:.4f} test_acc={test_acc:.4f} test_loss={test_loss:.4f}")
         mean_acc, std_acc = summarize(accs)
         mean_loss, std_loss = summarize(losses)
         b_results[B] = (mean_acc, std_acc, mean_loss, std_loss)
@@ -404,38 +502,55 @@ def run_experiment(dataset_name="MUTAG",
     else:
         print(f"\n=> Best B-cos (B={best_B}) did NOT beat standard in this experiment (best acc {best_acc:.4f}).")
 
-    # optional plot
-    try:
-        Bs = sorted(list(b_results.keys()))
-        accs_plot = [b_results[B][0] for B in Bs]
-        errs = [b_results[B][1] for B in Bs]
-        plt.errorbar(Bs, accs_plot, yerr=errs, marker='o', capsize=5)
-        plt.axhline(std_mean_acc, linestyle='--', color='gray', label='Standard GraphSAGE')
-        plt.xlabel('B value')
-        plt.ylabel('Mean Test Accuracy')
-        plt.title(f'{dataset_name} — B-cos GraphSAGE vs Standard')
-        plt.legend()
-        outpng = f"bcos_vs_standard_{dataset_name}.png"
-        plt.savefig(outpng, dpi=200, bbox_inches='tight')
-        print(f"Plot saved to {outpng}")
-    except Exception as e:
-        print("Plotting failed:", e)
-
-    return {
-        "standard": (std_mean_acc, std_std_acc, std_mean_loss, std_std_loss),
-        "b_results": b_results,
-        "best_B": best_B
+    result = {
+        "dataset": dataset_name,
+        "standard": {
+            "acc_mean": std_mean_acc,
+            "acc_std": std_std_acc,
+            "loss_mean": std_mean_loss,
+            "loss_std": std_std_loss,
+        },
+        "b_results": {
+            str(B): {
+                "acc_mean": vals[0],
+                "acc_std": vals[1],
+                "loss_mean": vals[2],
+                "loss_std": vals[3],
+            }
+            for B, vals in b_results.items()
+        },
+        "best_B": best_B,
+        "best_bcos_acc": best_acc,
+        "bcos_tuning": {
+            "bcos_epochs": bcos_epochs,
+            "bcos_lr": bcos_lr,
+            "bcos_weight_decay": bcos_weight_decay,
+            "bcos_dropout": bcos_dropout,
+            "bias_free_bcos_layers": True,
+            "non_affine_norm_for_bcos": True,
+            "bias_free_bcos_classifier": True,
+            "relu_elu_in_bcos": False
+        },
     }
+
+    outfile = os.path.join(save_dir, f"{dataset_name}_bcos_graphsage_results.json")
+    with open(outfile, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"Summary saved to {outfile}")
+
+    return result
 
 # -------------------------
 # CLI
 # -------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="MUTAG", choices=["MUTAG","PROTEINS"],
-                        help="Dataset to run")
+    parser.add_argument("--dataset", type=str, default="all", choices=["MUTAG", "PROTEINS", "all"],
+                        help="Dataset to run: MUTAG, PROTEINS, or all")
     parser.add_argument("--device", type=str, default=None, help="cuda, mps, or cpu (auto-detect if None)")
+    parser.add_argument("--save_dir", type=str, default="results", help="Directory to save logs, plots, and JSON summaries")
     args = parser.parse_args()
+
     dev = None
     if args.device:
         try:
@@ -443,4 +558,25 @@ if __name__ == "__main__":
         except (RuntimeError, AssertionError):
             print(f"Warning: device '{args.device}' not available, falling back to auto-detect")
             dev = None
-    run_experiment(dataset_name=args.dataset, B_values=[1.0,1.5,2.0,2.5], runs=5, device=dev)
+
+    datasets_to_run = ["MUTAG", "PROTEINS"] if args.dataset == "all" else [args.dataset]
+    all_results = {}
+
+    for ds_name in datasets_to_run:
+        print("\n\n##################################################")
+        print(f"Running dataset: {ds_name}")
+        print("##################################################")
+        all_results[ds_name] = run_experiment(
+            dataset_name=ds_name,
+            B_values=[1.0, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0],
+            runs=5,
+            device=dev,
+            save_dir=args.save_dir,
+        )
+
+    if len(datasets_to_run) > 1:
+        os.makedirs(args.save_dir, exist_ok=True)
+        combined_file = os.path.join(args.save_dir, "all_bcos_graphsage_results.json")
+        with open(combined_file, "w") as f:
+            json.dump(all_results, f, indent=2)
+        print("\n=== ALL DATASETS COMPLETED ===")
