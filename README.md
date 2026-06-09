@@ -35,6 +35,7 @@ bcos-gnn/
 ├── Graph-classification/
 │   ├── B-cosGCN/
 │   │   ├── gcn.py
+|   |   |__bcos-gcn-Mutag-anal2.py 
 │   │   └── bcos-gcn-Mutag-anal6.py
 │   ├── B-cosGAT/
 │   │   └── gat.py
@@ -218,6 +219,7 @@ python gcn.py
 For MUTAG fidelity analysis:
 
 ```bash
+bcos-gcn-Mutag-anal2.py
 python bcos-gcn-Mutag-anal6.py
 ```
 
