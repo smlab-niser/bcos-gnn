@@ -36,7 +36,7 @@ bcos-gnn/
 │   ├── B-cosGCN/
 │   │   ├── gcn.py
 |   |   |__bcos-gcn-Mutag-anal2.py 
-│   │   └── bcos-gcn-Mutag-anal6.py
+│   │   └──bcos-gcn-Mutag-anal6.py
 │   ├── B-cosGAT/
 │   │   └── gat.py
 │   └── B-cosGraphSAGE/
