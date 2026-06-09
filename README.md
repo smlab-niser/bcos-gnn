@@ -1,4 +1,4 @@
-# Bcos-GNN
+
 # Inherently Interpretable Graph Neural Networks via B-cos Alignment
 
 Accepted at the **28th International Conference on Pattern Recognition (ICPR 2026)**
