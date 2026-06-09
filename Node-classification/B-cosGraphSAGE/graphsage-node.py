@@ -9,9 +9,13 @@ Compare Baseline GraphSAGE vs BCos-GraphSAGE on node classification (Planetoid d
 - BCos-GraphSAGE implements B-cos scaling on messages and provides per-node contribution map for interpretability
 
 Usage:
+  # Run all three datasets in one command
+  python bcos_graphsage_node_cuda.py --dataset all --device cuda:0 --n_runs 5
+
+  # Or run a single dataset
   python bcos_graphsage_node_cuda.py --dataset Cora --device cuda:0 --n_runs 5
 
-Supports dataset names: Cora, CiteSeer, PubMed OR Quora (alias for Cora), CiteShare (alias for CiteSeer).
+Supports dataset names: Cora, CiteSeer, PubMed, or all.
 """
 import os
 import argparse
@@ -26,7 +30,6 @@ import torch.nn.functional as F
 
 from torch_geometric.datasets import Planetoid
 from torch_geometric.nn import SAGEConv
-from torch_geometric.utils import add_self_loops
 
 # -------------------------
 # Utilities
@@ -38,14 +41,28 @@ def set_seed(seed: int):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-def dataset_alias(name: str) -> str:
+def normalize_dataset_name(name: str) -> str:
+    """Return canonical dataset name.
+
+    Accepted names are exactly:
+      Cora, CiteSeer, PubMed, all
+
+    Case-insensitive input is allowed, but inconsistent aliases such as
+    Quora or CiteShare are intentionally not supported for RRPR reproducibility.
+    """
     name = name.strip()
-    if name.lower() in ('quora',):
-        return 'Cora'
-    if name.lower() in ('citeshare', 'citesear', 'citeseer', 'citeseer'):
-        return 'CiteSeer'
-    # otherwise pass through (expect 'Cora','CiteSeer','PubMed')
-    return name
+    mapping = {
+        "cora": "Cora",
+        "citeseer": "CiteSeer",
+        "pubmed": "PubMed",
+        "all": "all",
+    }
+    key = name.lower()
+    if key not in mapping:
+        raise ValueError(
+            f"Unknown dataset '{name}'. Use one of: Cora, CiteSeer, PubMed, all."
+        )
+    return mapping[key]
 
 # -------------------------
 # B-cos Linear (bias-free)
@@ -183,12 +200,13 @@ class BCosGraphSAGE(nn.Module):
         self.l1 = BCosSAGELayer(in_channels, hidden, B=B, use_residual=use_residual)
         # second layer maps hidden -> num_classes
         self.l2 = BCosSAGELayer(hidden, num_classes, B=B, use_residual=use_residual)
-        self.act = nn.ReLU()
 
     def forward(self, x, edge_index):
         h1, contrib1 = self.l1(x, edge_index)
-        h1 = self.act(h1)
+
+        # Paper setting: no ReLU activation is used in the B-cos model.
         h2, contrib2 = self.l2(h1, edge_index)
+
         return h2, (contrib1, contrib2)
 
 # -------------------------
@@ -271,7 +289,7 @@ def run_dataset(dataset_name: str,
     if B_grid is None:
         B_grid = [1.0, 1.5, 2.0, 2.5, 3.0]
 
-    name = dataset_alias(dataset_name)
+    name = normalize_dataset_name(dataset_name)
     assert name in ('Cora', 'CiteSeer', 'PubMed'), f"Unknown dataset {dataset_name}"
     # per-dataset defaults
     defaults = {
@@ -390,10 +408,15 @@ def run_dataset(dataset_name: str,
 # -------------------------
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', type=str, default='PubMed', help='Cora / CiteSeer / PubMed ')
+    p.add_argument(
+        '--dataset',
+        type=str,
+        default='all',
+        help='Dataset to run: Cora, CiteSeer, PubMed, or all'
+    )
     p.add_argument('--device', type=str, default='cuda:0')
     p.add_argument('--n_runs', type=int, default=5)
-    p.add_argument('--bgrid', nargs='+', type=float, default=[1.0,1.1,1.2,1.3,1.5,1.7,2.0])
+    p.add_argument('--bgrid', nargs='+', type=float, default=[1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0])
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--save_dir', type=str, default='results')
     args = p.parse_args()
@@ -402,5 +425,27 @@ if __name__ == "__main__":
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required by this script. Enable CUDA or edit script to allow CPU.")
 
-    set_seed(args.seed)
-    run_dataset(args.dataset, device_str=args.device, B_grid=args.bgrid, n_runs=args.n_runs, seed=args.seed, save_dir=args.save_dir)
+    selected_dataset = normalize_dataset_name(args.dataset)
+    datasets_to_run = ['Cora', 'CiteSeer', 'PubMed'] if selected_dataset == 'all' else [selected_dataset]
+
+    all_results = {}
+    for ds in datasets_to_run:
+        set_seed(args.seed)
+        result = run_dataset(
+            ds,
+            device_str=args.device,
+            B_grid=args.bgrid,
+            n_runs=args.n_runs,
+            seed=args.seed,
+            save_dir=args.save_dir
+        )
+        all_results[ds] = result
+
+    if len(datasets_to_run) > 1:
+        os.makedirs(args.save_dir, exist_ok=True)
+        combined_path = os.path.join(args.save_dir, "all_bcos_graphsage_summary_cuda.json")
+        with open(combined_path, "w") as f:
+            json.dump(all_results, f, indent=2)
+        print("\n=== ALL DATASETS COMPLETED ===")
+        print(f"Saved combined summary to {combined_path}")
+
