@@ -3,15 +3,17 @@
 bcos_gcn_tuned.py
 
 Goal:
- - Train & compare Standard GCN and BCos-GCN on MUTAG and PROTEINS (graph classification).
+ - Train and compare Standard GCN and BCos-GCN on MUTAG and PROTEINS.
  - Use cross-validation to report mean ± std accuracy and loss.
- - Search small hyperparameter grid (B values, residual ratio, learning rate) per dataset
-   to try to reach BCos-GCN >= standard GCN.
- - Compute interpretability metrics (fidelity, sparsity) for BCos-GCN.
+ - Search a small hyperparameter grid over B values, residual ratio, and learning rate.
+ - Compute interpretability metrics such as fidelity and sparsity for BCos-GCN.
+ - The Standard GCN baseline uses the standard ELU activation.
+ - The BCos-GCN model follows the paper setting without ReLU/ELU activations.
 
 Usage examples:
   python bcos_gcn_tuned.py --dataset MUTAG --device cuda
   python bcos_gcn_tuned.py --dataset PROTEINS --device cuda --epochs 200
+  python bcos_gcn_tuned.py --dataset all --device cuda --save_dir results
 
 Notes:
  - Expects dataset graphs in data/TUDataset/<dataset>.
@@ -22,6 +24,8 @@ import argparse
 import math
 import random
 import time
+import os
+import json
 from statistics import mean, stdev
 from typing import List, Tuple, Dict
 
@@ -97,8 +101,8 @@ class BCosActivation(nn.Module):
 # ---------------------------
 # Models: Standard GCN and BCos-GCN
 # ---------------------------
-class GCNStandard(nn.Module):
-    """Simple 2-layer GCN for graph classification (global mean pool)."""
+class StandardGCN(nn.Module):
+    """Standard 2-layer GCN baseline for graph classification with ELU activation."""
     def __init__(self, in_channels: int, hidden: int, out_channels: int, dropout: float = 0.5):
         super().__init__()
         self.conv1 = GCNConv(in_channels, hidden)
@@ -143,8 +147,13 @@ class BCosGCN(nn.Module):
 
     def forward(self, x, edge_index, batch):
         x = F.dropout(x, p=self.dropout, training=self.training)
-        x = F.elu(self.norm1(self.conv1(x, edge_index)))
-        h = F.elu(self.norm2(self.conv2(x, edge_index)))
+
+        # Paper setting: no ReLU/ELU activation is used in the B-cos model.
+        x = self.norm1(self.conv1(x, edge_index))
+
+        # Paper setting: no ReLU/ELU activation is used in the B-cos model.
+        h = self.norm2(self.conv2(x, edge_index))
+
         # residual blend: keep some raw h + some BCos(h)
         h_b = self.residual_ratio * h + (1.0 - self.residual_ratio) * self.bcos(h)
         self._h_nodes = h_b
@@ -252,7 +261,7 @@ def run_fold(train_dataset: List, val_dataset: List, test_dataset: List,
 
     # Model select
     if model_name == "gcn":
-        model = GCNStandard(in_ch, hidden, out_ch, dropout)
+        model = StandardGCN(in_ch, hidden, out_ch, dropout)
     else:
         model = BCosGCN(in_ch, hidden, out_ch, dropout, B=B, temp=temp, learn_B=learn_B, residual_ratio=residual_ratio)
 
@@ -331,6 +340,7 @@ def run_experiment(args):
     device = get_device(args.device)
     print("Running experiment with args:", args)
     print("Device:", device)
+    os.makedirs(args.save_dir, exist_ok=True)
 
     # load dataset (assume data present)
     dataset = TUDataset(root=args.data_root, name=args.dataset)
@@ -467,35 +477,28 @@ def run_experiment(args):
     else:
         print(f"  GCN WIN: {results['gcn']['test_mean']:.4f} > BCos {best_bcos_overall['test_mean']:.4f}")
 
+    output = {
+        "dataset": args.dataset,
+        "standard_gcn": results["gcn"],
+        "bcos_gcn": {k: v for k, v in results.items() if k.startswith("bcos-gcn")},
+        "best_bcos_overall": best_bcos_overall,
+    }
+
+    outfile = os.path.join(args.save_dir, f"{args.dataset}_bcos_gcn_results.json")
+    with open(outfile, "w") as f:
+        json.dump(output, f, indent=2)
+    print(f"Summary saved to {outfile}")
+
     return results, best_bcos_overall
 
 # ---------------------------
 # CLI / defaults
 # ---------------------------
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="PROTEINS", choices=["MUTAG","PROTEINS"])
-    parser.add_argument("--data_root", type=str, default="data/TUDataset")
-    parser.add_argument("--device", type=str, default="cuda", choices=["cuda","cpu"])
-    parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--hidden", type=int, default=96)
-    parser.add_argument("--dropout", type=float, default=0.35)
-    parser.add_argument("--B_values", nargs="+", type=float, default=[1.0,1.5,2.0,2.5])
-    parser.add_argument("--residual_grid", nargs="+", type=float, default=[0.6,0.75,0.9])
-    parser.add_argument("--lr_grid", nargs="+", type=float, default=[0.0035,0.001,0.0005])
-    parser.add_argument("--lr_gcn", type=float, default=0.0035)
-    parser.add_argument("--lr", type=float, default=0.0035)  # fallback
-    parser.add_argument("--weight_decay", type=float, default=4e-4)
-    parser.add_argument("--temp", type=float, default=1.9)
-    parser.add_argument("--learn_B", action="store_true", help="set to learn B as parameter")
-    parser.add_argument("--allow_feature_fix", action="store_true", help="if dataset lacks x, create degree features")
-    parser.add_argument("--early_stop", type=int, default=40)
-    parser.add_argument("--log_interval", type=int, default=10)
-    parser.add_argument("--seed", type=int, default=42)
-    args = parser.parse_args()
+def apply_dataset_defaults(args, dataset_name):
+    """Apply dataset-specific defaults used in the paper-style reproduction run."""
+    args.dataset = dataset_name
 
-    # small adjustments per dataset for faster/better convergence (you can change)
-    if args.dataset.upper() == "MUTAG":
+    if dataset_name.upper() == "MUTAG":
         args.B_values = [1.0, 1.5, 2.0, 2.5]
         args.residual_grid = [0.6, 0.75, 0.9]
         args.lr_grid = [0.0035, 0.001, 0.0005]
@@ -508,8 +511,56 @@ def main():
         args.hidden = 128
         args.epochs = 250
 
-    print("Starting run with dataset:", args.dataset)
-    run_experiment(args)
+    return args
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=str, default="all", choices=["MUTAG", "PROTEINS", "all"])
+    parser.add_argument("--data_root", type=str, default="data/TUDataset")
+    parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--hidden", type=int, default=96)
+    parser.add_argument("--dropout", type=float, default=0.35)
+    parser.add_argument("--B_values", nargs="+", type=float, default=[1.0, 1.5, 2.0, 2.5])
+    parser.add_argument("--residual_grid", nargs="+", type=float, default=[0.6, 0.75, 0.9])
+    parser.add_argument("--lr_grid", nargs="+", type=float, default=[0.0035, 0.001, 0.0005])
+    parser.add_argument("--lr_gcn", type=float, default=0.0035)
+    parser.add_argument("--lr", type=float, default=0.0035)  # fallback
+    parser.add_argument("--weight_decay", type=float, default=4e-4)
+    parser.add_argument("--temp", type=float, default=1.9)
+    parser.add_argument("--learn_B", action="store_true", help="set to learn B as parameter")
+    parser.add_argument("--allow_feature_fix", action="store_true", help="if dataset lacks x, create degree features")
+    parser.add_argument("--early_stop", type=int, default=40)
+    parser.add_argument("--log_interval", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--save_dir", type=str, default="results")
+    args = parser.parse_args()
+
+    datasets_to_run = ["MUTAG", "PROTEINS"] if args.dataset == "all" else [args.dataset]
+    all_results = {}
+
+    for dataset_name in datasets_to_run:
+        print("\n\n##################################################")
+        print(f"Starting run with dataset: {dataset_name}")
+        print("##################################################")
+
+        dataset_args = argparse.Namespace(**vars(args))
+        dataset_args = apply_dataset_defaults(dataset_args, dataset_name)
+        results, best_bcos = run_experiment(dataset_args)
+        all_results[dataset_name] = {
+            "results": results,
+            "best_bcos_overall": best_bcos,
+        }
+
+    if len(datasets_to_run) > 1:
+        os.makedirs(args.save_dir, exist_ok=True)
+        combined_file = os.path.join(args.save_dir, "all_bcos_gcn_results.json")
+        with open(combined_file, "w") as f:
+            json.dump(all_results, f, indent=2)
+        print("\n=== ALL DATASETS COMPLETED ===")
+        print(f"Combined summary saved to {combined_file}")
+
 
 if __name__ == "__main__":
     main()
